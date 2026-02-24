@@ -432,16 +432,6 @@ module {
     { args = args; caller = caller };
   };
 
-  /// Build an update context with cycles
-  // public func updateContext<T>(args: T, caller: Principal) : MiddlewareContext<T> {
-  //   {
-  //     args = args;
-  //     caller = caller;
-  //     cycles = ?Cycles.available();
-  //     deadline = null;  // Future Motoko feature
-  //   };
-  // };
-
   /// Build a transfer context with cycles and canTransfer
   public func transferContext(args: ICRC1.TransferArgs, caller: Principal, canTransfer: ICRC1.CanTransfer) : TransferContext {
     {

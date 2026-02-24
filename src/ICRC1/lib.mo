@@ -673,7 +673,7 @@ module {
             case(?val) switch(val){
               case(#Fixed(val))val;
               case(#Environment){
-                //calculated at runtime so we return a lie
+                //placeholder: actual fee is determined at runtime via environment callback
                 DEFAULT_FEE;
               };
             };
@@ -741,7 +741,7 @@ module {
             case(?val){
               switch(val){
                 case(#Fixed(val))val;
-                case(#Environment) DEFAULT_FEE; //a lie as it is determined at runtime.
+                case(#Environment) DEFAULT_FEE; //placeholder: actual fee is determined at runtime via environment callback.
               };
             }
           })));
@@ -1575,7 +1575,7 @@ module {
               args with from_subaccount = state.minting_account.subaccount;
               fee = null;
           };
-          //todo: override on initial mint?
+          //Note: canTransfer hook is skipped for minting — authorization is at the actor level.
           await* transfer_tokens(caller, transfer_args, false, null);
       };
 
@@ -1776,7 +1776,7 @@ module {
           switch(result){
             case(#err(_)){
               //don't waste cycles. something is wrong
-              //todo: add notification
+              //Note: consider adding an error notification callback in a future version
               return;
             };
             case(_){};
