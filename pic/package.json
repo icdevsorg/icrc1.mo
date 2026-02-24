@@ -1,0 +1,17 @@
+{
+  "name": "icrc1-pic-tests",
+  "version": "1.0.0",
+  "description": "PocketIC tests for ICRC1.mo - DFINITY state machine test coverage",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prebuild": "dfx generate icrc1"
+  },
+  "devDependencies": {
+    "@dfinity/pic": "^0.17.2",
+    "@icp-sdk/core": "^5.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  }
+}

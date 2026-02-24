@@ -1,0 +1,37 @@
+{
+    "version": 1,
+    "canisters": {
+        "icrc1": {
+            "type": "motoko",
+            "gzip": true,
+            "main": "src/ICRC1/Canisters/Token.mo"
+        },
+        "icrc1mixin": {
+            "type": "motoko",
+            "gzip": true,
+            "main": "src/ICRC1/Canisters/Token-mixin.mo"
+        },
+        "icrc1interface": {
+            "type": "motoko",
+            "gzip": true,
+            "main": "src/ICRC1/Canisters/Token-interface-test.mo"
+        },
+        "test": {
+            "type": "motoko",
+            "main": "tests/ActorTest.mo"
+        }
+    },
+    "defaults": {
+        "build": {
+            "packtool": "mops sources",
+            "args": ""
+        }
+    },
+    "networks": {
+        "local": {
+            "bind": "127.0.0.1:8887",
+            "type": "ephemeral"
+        }
+    }
+    
+}

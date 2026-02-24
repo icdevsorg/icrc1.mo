@@ -1,0 +1,23 @@
+# Various IDEs and Editors
+.vscode/
+.idea/
+**/*~
+
+# Mac OSX temporary files
+.DS_Store
+**/.DS_Store
+
+# dfx temporary files
+.dfx/
+.vessel/
+.mops/
+
+# frontend code
+node_modules/
+dist/
+
+Cargo.lock
+src/ICRC1/todo.md
+todo.md
+.git_backup_1771440221/
+pic/DFINITY_TEST_COVERAGE.md
