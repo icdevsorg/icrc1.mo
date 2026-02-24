@@ -28,37 +28,97 @@ import ICRC1 "mo:icrc1-mo";
 
 ## Initialization
 
-This ICRC1 class uses a migration pattern as laid out in https://github.com/ZhenyaUsenko/motoko-migrations, but encapsulates the pattern in the Class+ pattern as described at https://forum.dfinity.org/t/writing-motoko-stable-libraries/21201 . As a result, when you insatiate the class you need to pass the stable memory state into the class:
+### Recommended: Mixin Pattern (Motoko 1.1.0+)
 
-```
+The mixin pattern is the recommended way to initialize ICRC-1. It uses `persistent actor class` syntax with Class+ and automatically generates all ICRC-1 endpoints, ICRC-106/107 support, ICRC-21 consent messages, and built-in cycle drain guards.
 
-stable var icrc1_migration_state = ICRC1.init(ICRC1.initialState() , #v0_1_0(#id), _args, init_msg.caller);
+```motoko
+import ICRC1Mixin "mo:icrc1-mo/ICRC1/mixin";
+import ICRC1 "mo:icrc1-mo/ICRC1";
+import ClassPlus "mo:class-plus";
+import Principal "mo:core/Principal";
 
-  let #v0_1_0(#data(icrc1_state_current)) = icrc1_migration_state;
+shared ({ caller = _owner }) persistent actor class MyToken(
+  init_args : ?ICRC1.InitArgs
+) = this {
 
-  private var _icrc1 : ?ICRC1.ICRC1 = null;
+  transient let canisterId = Principal.fromActor(this);
+  transient let manager = ClassPlus.ClassPlusInitializationManager<system>(_owner, canisterId, true);
 
-  private func get_icrc1_environment() : ICRC1.Environment{
-    ?{
-    
-      get_fee = null;
-      add_ledger_transaction = icrc3().add_record; //define and instantiate icrc3 as indicated in the icrc3-mo package
+  private func get_icrc1_environment() : ICRC1.Environment {
+    {
+      advanced = null;
+      add_ledger_transaction = null; // or ?icrc3().add_record for ICRC-3 integration
+      var org_icdevs_timer_tool = null;
+      var org_icdevs_class_plus_manager = ?manager;
     };
   };
 
-  func icrc1() : ICRC1.ICRC1 {
-    switch(_icrc1){
-      case(null){
-        let initclass : ICRC1.ICRC1 = ICRC1.ICRC1(?icrc1_migration_state, Principal.fromActor(this), get_icrc1_environment());
-        _icrc1 := ?initclass;
-        initclass;
-      };
-      case(?val) val;
-    };
-  };
+  include ICRC1Mixin.mixin({
+    ICRC1.defaultMixinArgs(manager) with
+    args = init_args;
+    pullEnvironment = ?get_icrc1_environment;
+    canSetFeeCollector = ?(func(caller : Principal) : Bool { Principal.isController(caller) }); // Enable ICRC-107
+    canSetIndexPrincipal = ?(func(caller : Principal) : Bool { Principal.isController(caller) }); // Enable ICRC-106
+  });
 
+  // The mixin provides:
+  //   icrc1()                        - access the ICRC1 class instance
+  //   org_icdevs_icrc1_interface     - extensible interface for before/after hooks
+  //   All ICRC-1, ICRC-10, ICRC-21, ICRC-106, ICRC-107 endpoints
+};
 ```
-The above pattern will allow your class to call icrc1().XXXXX to easily access the stable state of your class and you will not have to worry about pre or post upgrade methods.
+
+The mixin auto-generates all public endpoints (`icrc1_transfer`, `icrc1_balance_of`, `icrc1_name`, etc.) with built-in argument guards that trap oversized inputs for inter-canister calls. For ingress protection, see [Cycle Drain Protection](#cycle-drain-protection) below.
+
+#### MixinFunctionArgs
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `org_icdevs_class_plus_manager` | `ClassPlusInitializationManager` | Required. The Class+ manager instance |
+| `args` | `?InitArgs` | Optional init args (see below) |
+| `pullEnvironment` | `?(() -> Environment)` | Optional function returning the environment |
+| `onInitialize` | `?(ICRC1 -> async*())` | Optional callback after initialization |
+| `canTransfer` | `CanTransfer` | Optional interceptor for validating/modifying transfers |
+| `canSetFeeCollector` | `?((Principal) -> Bool)` | Authorization for ICRC-107. `null` disables the endpoint |
+| `canSetIndexPrincipal` | `?((Principal) -> Bool)` | Authorization for ICRC-106. `null` disables the endpoint |
+
+### Legacy: Direct Instantiation
+
+For older codebases not yet using `persistent actor class`:
+
+```motoko
+stable var icrc1_migration_state = ICRC1.init(ICRC1.initialState(), #v0_1_0(#id), _args, init_msg.caller);
+
+let #v0_1_0(#data(icrc1_state_current)) = icrc1_migration_state;
+
+private var _icrc1 : ?ICRC1.ICRC1 = null;
+
+private func get_icrc1_environment() : ICRC1.Environment {
+  {
+    advanced = null;
+    get_fee = null;
+    add_ledger_transaction = ?icrc3().add_record;
+    var org_icdevs_timer_tool = null;
+    var org_icdevs_class_plus_manager = null;
+  };
+};
+
+func icrc1() : ICRC1.ICRC1 {
+  switch(_icrc1){
+    case(null){
+      let initclass : ICRC1.ICRC1 = ICRC1.ICRC1(?icrc1_migration_state, Principal.fromActor(this), get_icrc1_environment());
+      _icrc1 := ?initclass;
+      initclass;
+    };
+    case(?val) val;
+  };
+};
+```
+
+The above pattern will allow your class to call `icrc1().XXXXX` to easily access the stable state of your class and you will not have to worry about pre or post upgrade methods.
+
+The mixin pattern handles all boilerplate automatically and is recommended for new projects.
 
 Init args:
 
@@ -477,6 +537,116 @@ Balance lookup and update using ICRC1.Utils functions.
 | get_balance    | 1_570_487 | 20_582_458 | 239_600_278 |
 | update_balance | 1_989_436 | 26_809_064 | 318_266_388 |
 
+## Cycle Drain Protection
+
+On the Internet Computer, ingress messages cost cycles to decode. An attacker can send messages with oversized unbounded arguments (large `Nat`, `Blob`, `Text`) to drain a canister's cycles without making valid calls. This library provides a two-layer defense:
+
+### Layer 1: Guards (Inter-Canister Protection)
+
+The mixin automatically calls guard functions before processing arguments. These trap immediately if arguments exceed safe limits:
+
+```
+icrc1_transfer     → Inspect.guardTransfer()
+icrc1_balance_of   → Inspect.guardBalanceOf()
+icrc107_set_fee_collector → Inspect.guardSetFeeCollector()
+icrc21_canister_call_consent_message → Inspect.guardConsentMessage()
+```
+
+No action is required — this protection is built into the mixin.
+
+### Layer 2: Inspect (Ingress Protection)
+
+Guard functions cannot protect against ingress messages because `system func inspect()` runs before the message is dispatched to the endpoint. You must wire up inspect in your actor to reject oversized ingress messages before cycles are spent decoding them.
+
+Import the Inspect module and use the `inspect*` functions (which return `Bool`) in your `system func inspect()`:
+
+```motoko
+import ICRC1Inspect "mo:icrc1-mo/ICRC1/Inspect";
+
+// In your persistent actor class
+system func inspect(
+  {
+    arg : Blob;
+    msg : {
+      #icrc1_balance_of : () -> ICRC1.Account;
+      #icrc1_transfer : () -> ICRC1.TransferArgs;
+      #icrc1_name : () -> ();
+      #icrc1_symbol : () -> ();
+      #icrc1_decimals : () -> ();
+      #icrc1_fee : () -> ();
+      #icrc1_metadata : () -> ();
+      #icrc1_total_supply : () -> ();
+      #icrc1_minting_account : () -> ();
+      #icrc1_supported_standards : () -> ();
+      #icrc10_supported_standards : () -> ();
+      #icrc107_set_fee_collector : () -> ICRC1.SetFeeCollectorArgs;
+      #icrc107_get_fee_collector : () -> ();
+      #icrc106_get_index_principal : () -> ();
+      #icrc21_canister_call_consent_message : () -> ICRC1.ConsentMessageRequest;
+      #mint : () -> ICRC1.Mint;
+      #burn : () -> ICRC1.BurnArgs;
+      // ... your other endpoints
+    };
+  }
+) : Bool {
+  // Check raw arg size FIRST — cheapest check, prevents expensive decoding
+  if (arg.size() > 50_000) return false;
+
+  switch (msg) {
+    case (#icrc1_transfer(getArgs)) { ICRC1Inspect.inspectTransfer(getArgs(), null) };
+    case (#icrc1_balance_of(getArgs)) { ICRC1Inspect.inspectBalanceOf(getArgs(), null) };
+    case (#icrc107_set_fee_collector(getArgs)) { ICRC1Inspect.inspectSetFeeCollector(getArgs(), null) };
+    case (#icrc21_canister_call_consent_message(getArgs)) { ICRC1Inspect.inspectConsentMessage(getArgs(), null) };
+    case (#mint(getArgs)) {
+      let args = getArgs();
+      ICRC1Inspect.isValidAccount(args.to, ICRC1Inspect.defaultConfig) and
+      ICRC1Inspect.isValidNat(args.amount, ICRC1Inspect.defaultConfig) and
+      ICRC1Inspect.isValidMemo(args.memo, ICRC1Inspect.defaultConfig);
+    };
+    case (#burn(getArgs)) { ICRC1Inspect.inspectBurn(getArgs(), null) };
+    // Endpoints with only bounded types — always accept
+    case (_) { true };
+  };
+};
+```
+
+### Inspect Module API
+
+The Inspect module (`mo:icrc1-mo/ICRC1/Inspect`) provides:
+
+| Function | Purpose | Returns |
+|----------|---------|---------|
+| `inspectTransfer(args, ?config)` | Validate `icrc1_transfer` args | `Bool` |
+| `inspectBalanceOf(args, ?config)` | Validate `icrc1_balance_of` args | `Bool` |
+| `inspectBurn(args, ?config)` | Validate burn args | `Bool` |
+| `inspectSetFeeCollector(args, ?config)` | Validate `icrc107_set_fee_collector` args | `Bool` |
+| `inspectConsentMessage(args, ?config)` | Validate `icrc21_canister_call_consent_message` args | `Bool` |
+| `guardTransfer(args, ?config)` | Guard version — traps on invalid | `()` |
+| `guardBalanceOf(args, ?config)` | Guard version — traps on invalid | `()` |
+| `guardBurn(args, ?config)` | Guard version — traps on invalid | `()` |
+| `guardSetFeeCollector(args, ?config)` | Guard version — traps on invalid | `()` |
+| `guardConsentMessage(args, ?config)` | Guard version — traps on invalid | `()` |
+
+Pass `null` for config to use default limits. To customize:
+
+```motoko
+let customConfig = ICRC1Inspect.configWith({
+  maxMemoSize = ?64;       // Allow larger memos
+  maxNatDigits = ?50;      // Allow larger numbers
+  maxSubaccountSize = null; // Keep default (32)
+  maxRawArgSize = null;     // Keep default (256)
+});
+ICRC1Inspect.inspectTransfer(args, ?customConfig);
+```
+
+Default limits:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `maxMemoSize` | 32 | ICRC-1 standard memo limit |
+| `maxNatDigits` | 40 | ~2^128 digit count |
+| `maxSubaccountSize` | 32 | Standard subaccount size |
+| `maxRawArgSize` | 256 | Max raw arg blob for single transfer |
+
 ## Security Notes
 
 The following functions do not provide security and must be guarded at the implementation level:
@@ -527,30 +697,6 @@ By default, this library shares a small portion of cycles with ICDevs.org to fun
 | **Grace Period** | 7 days after initial deploy |
 | **Collector** | `q26le-iqaaa-aaaam-actsa-cai` (ICDevs OVS Ledger) |
 | **Namespace** | `org.icdevs.icrc85.icrc1` |
-
-### Disabling or Customizing OVS
-
-OVS participation is **voluntary** and can be disabled or customized via the environment:
-
-```motoko
-private func get_icrc1_environment() : ICRC1.Environment {
-  {
-    // ... other environment settings ...
-    advanced = ?{
-      icrc85 = ?{
-        kill_switch = ?true;  // Set to true to disable OVS
-        // Or customize:
-        // collector = ?Principal.fromText("your-collector");
-        // period = ?(30 * 86_400_000_000_000);  // 30 days
-        handler = null;
-        asset = null;
-        platform = null;
-        tree = null;
-      };
-    };
-  };
-};
-```
 
 ### OVS Statistics
 
