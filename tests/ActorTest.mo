@@ -1,4 +1,5 @@
 import Debug "mo:core/Debug";
+import Runtime "mo:core/Runtime";
 
 import ICRC1 "ICRC1/ICRC1.ActorTest";
 
@@ -16,7 +17,7 @@ persistent actor {
             let success = ActorSpec.run([await test()]);
 
             if (success == false) {
-                Debug.trap("\1b[46;41mTests failed\1b[0m");
+                Runtime.trap("\1b[46;41mTests failed\1b[0m");
             } else {
                 Debug.print("\1b[23;42;3m Success!\1b[0m");
             };
