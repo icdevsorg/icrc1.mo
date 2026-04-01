@@ -1737,15 +1737,17 @@ module {
     /// `cleanUpRecents`
     ///
     /// Iterates through and removes transactions from the 'recent transactions' index that are no longer within the permitted drift.
-    public func cleanUpRecents() : (){
-      label clean for(thisItem in Map.entries(state.recent_transactions)){
-        if(thisItem.1.0 + state.transaction_window < get_time64()){
-          //we can remove this item;
-          ignore Map.take(state.recent_transactions, Blob.compare, thisItem.0);
+    public func cleanUpRecents() : () {
+      let toRemove = List.empty<Blob>();
+      label clean for (thisItem in Map.entries(state.recent_transactions)) {
+        if (thisItem.1.0 + state.transaction_window < get_time64()) {
+          List.add(toRemove,thisItem.0);
         } else {
-          //items are inserted in order in this map so as soon as we hit a still valid item, the rest of the list should still be valid as well
           break clean;
         };
+      };
+      for (key in List.values(toRemove)) {
+        ignore Map.take(state.recent_transactions, Blob.compare, key);
       };
     };
 
